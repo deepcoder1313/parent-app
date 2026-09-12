@@ -1,9 +1,14 @@
 import axios from "axios";
 
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  "http://192.168.31.237:5000/api";
+
 const API = axios.create({
-  baseURL: "http://192.168.31.237:5000/api" // ⚠️ your WiFi IP
+  baseURL: API_BASE_URL,
 });
-console.log("🔥 CURRENT API:", API.defaults.baseURL);
+
+console.log("🔥 PARENT API:", API.defaults.baseURL);
 
 export const getRoutes = () =>
   API.get("/routes");
