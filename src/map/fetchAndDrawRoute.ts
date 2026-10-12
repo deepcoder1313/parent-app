@@ -35,7 +35,7 @@ function decodePolyline(encoded: string): [number, number][] {
  * If dryRun=false → also injects decoded points into WebView
  */
 export async function fetchAndDrawRoute(
-  webViewRef: RefObject<WebView>,
+  webViewRef: RefObject<WebView> | null,
   fromLat: number, fromLng: number,
   toLat:   number, toLng:   number,
   dryRun = false
@@ -65,8 +65,9 @@ export async function fetchAndDrawRoute(
     };
 
     // Inject into running WebView (for live reroute updates)
-    if (!dryRun && webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
+    const webView = webViewRef?.current;
+    if (!dryRun && webView) {
+      webView.injectJavaScript(`
         if (window.drawRoute) {
           window.drawRoute(${JSON.stringify(decodedPoints)});
         }

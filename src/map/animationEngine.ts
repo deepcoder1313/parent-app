@@ -12,12 +12,8 @@ export function animationEngineJs(
   var fromLng      = busLng;
   var targetLat    = busLat;
   var targetLng    = busLng;
-  var trailCoords  = [[busLat, busLng]];
-
-  // Green trail line
-  var trailLine = L.polyline(trailCoords, {
-    color: "#10B981", weight: 3, opacity: 0.5,
-  }).addTo(map);
+var trailCoords = [];
+var trailLine = null;
 
   // ── Smooth interpolation ──────────────────────────────
   function animateBus(timestamp) {
@@ -54,30 +50,57 @@ export function animationEngineJs(
       map.panTo([lat, lng], { animate: true, duration: 0.6 });
     }
   }
+window.smoothMoveBus = function(lat, lng, heading, speed) {
 
-  // ── Main entry — called from React Native via injectJS ─
-  window.smoothMoveBus = function(lat, lng, heading) {
-    targetLat = lat;
-    targetLng = lng;
-    animStart = null;
+  var currentPos = busMarker.getLatLng();
 
-    rotateBus(heading);
+  fromLat = currentPos.lat;
+  fromLng = currentPos.lng;
 
-    // Trim driven portion from route line
-    if (typeof trimRouteToCurrentPosition === "function") {
-      trimRouteToCurrentPosition(lat, lng);
-    }
+  targetLat = lat;
+  targetLng = lng;
 
-    // Extend green trail
+  animStart = null;
+
+  rotateBus(heading);
+
+  // Don't draw driven route while vehicle is stationary
+  if (speed <= 3) {
+    console.log("⏸️ BUS STATIONARY:", speed, "km/h");
+
+    requestAnimationFrame(animateBus);
+    return;
+  }
+
+  // Vehicle is actually moving
+  if (!trailLine) {
+
+    trailCoords = [
+      [currentPos.lat, currentPos.lng],
+      [lat, lng]
+    ];
+
+    trailLine = L.polyline(trailCoords, {
+      color: "#10B981",
+      weight: 3,
+      opacity: 0.5,
+      lineCap: "round",
+      lineJoin: "round",
+    }).addTo(map);
+
+  } else {
+
     trailCoords.push([lat, lng]);
     trailLine.setLatLngs(trailCoords);
 
-    // Start animation
-    requestAnimationFrame(animateBus);
+  }
 
-    // Pan camera if bus leaves view
-    updateCamera(lat, lng);
-  };
+  trimRouteToCurrentPosition(lat, lng);
+
+  requestAnimationFrame(animateBus);
+
+  updateCamera(lat, lng);
+};
 
   // Backward-compat alias
   window.updateDriverPosition = window.smoothMoveBus;

@@ -2,77 +2,137 @@
 
 import { io, Socket } from "socket.io-client";
 
-const BACKEND = "http://192.168.31.237:5000"; // ⚠️ your WiFi IP
+const BACKEND = "https://school-bus-backend-b3nc.onrender.com";
 
 export interface BusUpdate {
-  latitude:  number;
+  latitude: number;
   longitude: number;
-  heading?:  number;
-  speed?:    number;
+  heading?: number;
+  speed?: number;
   distance?: number;
-  eta?:      number | string;
-  busNo?:    string;
+  eta?: number | string;
+  busNo?: string;
 }
 
 export interface TripStartedData {
-  tripId:    string;
-  busNo:     string;
-  driverId:  string;
-  tripType:  "morning" | "return";
+  tripId: string;
+  busNo: string;
+  driverId: string;
+  tripType: "morning" | "return";
   startTime: string;
 }
 
 export interface SocketCallbacks {
-  onConnect:           () => void;
-  onDisconnect:        () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
   onBusLocationUpdate: (bus: BusUpdate) => void;
-  onTripEnded:         (data: { busNo: string }) => void;
-  onTripStarted?:      (data: TripStartedData) => void;  // ✅ optional
+  onTripEnded: (data: { busNo: string }) => void;
+  onTripStarted?: (data: TripStartedData) => void;
 }
 
-export function connectSocket(callbacks: SocketCallbacks): () => void {
-  const socket: Socket = io(BACKEND, {
-    transports:           ["websocket"],
-    reconnection:         true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay:    1000,
-    timeout:              10000,
-  });
+// ⭐ ONE persistent socket for the whole Parent App
+let socket: Socket | null = null;
 
-  socket.on("connect", () => {
-    console.log("🟢 Socket connected:", socket.id);
+export function connectSocket(
+  callbacks: SocketCallbacks
+): () => void {
+
+  // Create socket only once
+  if (!socket) {
+    console.log("🔵 Creating MAIN socket...");
+
+    socket = io(BACKEND, {
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+    });
+
+    socket.on("connect", () => {
+      console.log("🟢 Socket connected:", socket?.id);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("🔴 Socket disconnected:", reason);
+    });
+
+    socket.on("connect_error", (err) => {
+      console.log("❌ Socket connect error:", err.message);
+    });
+  }
+
+  // ------------------------------------------------
+  // Attach THIS screen's callbacks
+  // ------------------------------------------------
+
+  const handleConnect = () => {
+    console.log("🟢 PARENT SOCKET CONNECTED");
     callbacks.onConnect();
-  });
+  };
 
-  socket.on("disconnect", (reason) => {
-    console.log("🔴 Socket disconnected:", reason);
+  const handleDisconnect = () => {
+    console.log("🔴 PARENT SOCKET DISCONNECTED");
     callbacks.onDisconnect();
-  });
+  };
 
-  socket.on("connect_error", (err) => {
-    console.log("❌ Socket connect error:", err.message);
-  });
+  const handleBusLocation = (bus: BusUpdate) => {
+    console.log(
+      "📡 PARENT RECEIVED BUS:",
+      bus.latitude,
+      bus.longitude
+    );
 
-  socket.on("busLocationUpdated", (bus: BusUpdate) => {
-    console.log("📍 busLocationUpdated:", bus.latitude, bus.longitude);
     callbacks.onBusLocationUpdate(bus);
-  });
+  };
 
-  // ✅ 1. Trip Started
-  socket.on("tripStarted", (data: TripStartedData) => {
+  const handleTripStarted = (data: TripStartedData) => {
     console.log("🚌 tripStarted:", data);
-    callbacks.onTripStarted?.(data);
-  });
 
-  // ✅ 5. Trip Ended
-  socket.on("tripEnded", (data: { busNo: string }) => {
+    callbacks.onTripStarted?.(data);
+  };
+
+  const handleTripEnded = (data: { busNo: string }) => {
     console.log("🛑 tripEnded:", data);
+
     callbacks.onTripEnded(data);
-  });
+  };
+
+  socket.on("connect", handleConnect);
+  socket.on("disconnect", handleDisconnect);
+  socket.on("busLocationUpdated", handleBusLocation);
+  socket.on("tripStarted", handleTripStarted);
+  socket.on("tripEnded", handleTripEnded);
+
+  // If socket was already connected when MapScreen mounted
+  if (socket.connected) {
+    console.log(
+      "🟢 Socket already connected:",
+      socket.id
+    );
+
+    setTimeout(() => {
+      callbacks.onConnect();
+    }, 0);
+  }
+
+  // ------------------------------------------------
+  // Cleanup ONLY this screen's listeners
+  // DO NOT disconnect the global socket
+  // ------------------------------------------------
 
   return () => {
-    socket.removeAllListeners();
-    socket.disconnect();
-    console.log("🔌 Socket disconnected on cleanup");
+    console.log(
+      "🧹 Removing MapScreen socket listeners"
+    );
+
+    socket?.off("connect", handleConnect);
+    socket?.off("disconnect", handleDisconnect);
+    socket?.off("busLocationUpdated", handleBusLocation);
+    socket?.off("tripStarted", handleTripStarted);
+    socket?.off("tripEnded", handleTripEnded);
+
+    // ❌ DO NOT:
+    // socket.disconnect();
   };
 }

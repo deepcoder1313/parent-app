@@ -84,6 +84,7 @@ export default function Dashboard() {
   const [distance,   setDistance]   = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const parentRef = useRef<any>(null);
 
   // ✅ Trip status state
   const [tripActive,  setTripActive]  = useState(false);
@@ -91,57 +92,95 @@ export default function Dashboard() {
   const [tripStarted, setTripStarted] = useState<Date | null>(null);
 
   useEffect(() => {
-    loadData();
+  loadData();
+}, []);
 
-    // ✅ Socket — listen for trip events on dashboard
-    const cleanup = connectSocket({
-      onConnect:    () => {},
-      onDisconnect: () => {},
+useEffect(() => {
+  console.log("🚀 DASHBOARD SOCKET EFFECT MOUNTED");
 
-      onBusLocationUpdate: (busUpdate) => {
-        // Refresh ETA when bus moves
-        if (parent?.studentId?.pickupLatitude && busUpdate.latitude) {
-          const dist = getDistance(
-            busUpdate.latitude, busUpdate.longitude,
-            parent.studentId.pickupLatitude,
-            parent.studentId.pickupLongitude
-          );
-          setDistance(Math.round(dist));
-          const mins = Math.ceil((dist / 1000 / 30) * 60);
-          setEta(mins <= 1 ? "Arriving now" : `${mins} min`);
-        }
-      },
+  const cleanup = connectSocket({
+    onConnect: () => {
+      console.log("🟢 DASHBOARD SOCKET CONNECTED");
+    },
 
-      // ✅ 1. Trip Started
-      onTripStarted: (data: TripStartedData) => {
-        console.log("🚌 Dashboard: trip started", data);
-        setTripActive(true);
-        setTripType(data.tripType);
-        setTripStarted(new Date(data.startTime));
-        setBusStatus("Active");
-        loadData(); // refresh bus info
-      },
+    onDisconnect: () => {
+      console.log("🔴 DASHBOARD SOCKET DISCONNECTED");
+    },
 
-      // ✅ 5. Trip Ended
-      onTripEnded: (data) => {
-        console.log("🛑 Dashboard: trip ended", data);
-        setTripActive(false);
-        setBusStatus("Offline");
-        setEta("");
-        setDistance(null);
-      },
-    });
+    onBusLocationUpdate: (busUpdate) => {
+      console.log(
+        "📡 DASHBOARD BUS UPDATE:",
+        busUpdate.latitude,
+        busUpdate.longitude
+      );
 
-    return cleanup;
-  }, [parent]);
+      const p = parentRef.current;
 
-  const loadData = async () => {
-    const data = await AsyncStorage.getItem("parent");
-    if (!data) return;
-    const p = JSON.parse(data);
-    setParent(p);
-    await fetchBus(p);
+      if (
+        p?.studentId?.pickupLatitude &&
+        p?.studentId?.pickupLongitude
+      ) {
+        const dist = getDistance(
+          busUpdate.latitude,
+          busUpdate.longitude,
+          p.studentId.pickupLatitude,
+          p.studentId.pickupLongitude
+        );
+
+        setDistance(Math.round(dist));
+
+        const mins = Math.ceil((dist / 1000 / 30) * 60);
+
+        setEta(
+          mins <= 1
+            ? "Arriving now"
+            : `${mins} min`
+        );
+      }
+    },
+
+    onTripStarted: (data: TripStartedData) => {
+      console.log("🚌 Dashboard: trip started", data);
+
+      setTripActive(true);
+      setTripType(data.tripType);
+      setTripStarted(new Date(data.startTime));
+      setBusStatus("Active");
+
+      loadData();
+    },
+
+    onTripEnded: (data) => {
+      console.log("🛑 Dashboard: trip ended", data);
+
+      setTripActive(false);
+      setBusStatus("Offline");
+      setEta("");
+      setDistance(null);
+    },
+  });
+
+  return () => {
+    console.log("💥 DASHBOARD SOCKET EFFECT UNMOUNTING");
+    cleanup();
   };
+}, []);
+
+  
+
+ const loadData = async () => {
+  const data = await AsyncStorage.getItem("parent");
+
+  if (!data) return;
+
+  const p = JSON.parse(data);
+
+  parentRef.current = p;
+  setParent(p);
+
+  await fetchBus(p);
+};
+
 
   const fetchBus = async (p: any) => {
     const assignedBus = p?.studentId?.assignedBus;

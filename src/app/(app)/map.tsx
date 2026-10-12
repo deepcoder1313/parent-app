@@ -33,10 +33,20 @@ import { loadMapData } from "../../map/mapDataService";
 import { BusUpdate, connectSocket } from "../../map/socketManager";
 import { mapStyles } from "../../map/styles";
 export default function MapScreen() {
+    console.log("🔵 MAPSCREEN RENDER");
   const webViewRef = useRef<WebView>(null!);
+  useEffect(() => {
+  console.log("🟢 MAPSCREEN COMPONENT MOUNTED");
+
+  return () => {
+    console.log("🔴 MAPSCREEN COMPONENT UNMOUNTED");
+  };
+}, []);
 
   // ── State ──────────────────────────────────────────────
   const [html,       setHtml]       = useState("");
+  const mapReadyRef = useRef(false);
+const pendingBusUpdateRef = useRef<BusUpdate | null>(null);
   const [busNo,      setBusNo]      = useState("");
   const [busStatus,  setBusStatus]  = useState("Unknown");
   const [connected,  setConnected]  = useState(false);
@@ -55,6 +65,7 @@ const [driverPhone, setDriverPhone] = useState("");
 const [nextStopDistance, setNextStopDistance] = useState(0);
 const [nextStopEta, setNextStopEta] = useState("--");
 const [isArriving, setIsArriving] = useState(false);
+const tripEndedRef = useRef(false);
 
   const progressAnim = useRef(new Animated.Value(0)).current;
   const busNoRef     = useRef("");
@@ -67,120 +78,131 @@ const pickupLngRef = useRef<number | null>(null);
   const injectJs = (js: string) =>
     webViewRef.current?.injectJavaScript(`${js}\ntrue;`);
 
-  const moveBus = (lat: number, lng: number, heading: number) =>
-    injectJs(`window.smoothMoveBus && window.smoothMoveBus(${lat},${lng},${heading});`);
+
+const moveBus = (
+  lat: number,
+  lng: number,
+  heading: number,
+  speed: number
+) => {
+  // Keep only the latest location until Leaflet is ready
+  if (!mapReadyRef.current) {
+    pendingBusUpdateRef.current = {
+      latitude: lat,
+      longitude: lng,
+      heading,
+      speed,
+    };
+    console.log("⏳ Map not ready; queued latest bus location");
+    return;
+  }
+
+  webViewRef.current?.injectJavaScript(`
+    if (window.smoothMoveBus) {
+      window.smoothMoveBus(
+        ${lat},
+        ${lng},
+        ${heading},
+        ${speed}
+      );
+    }
+    true;
+  `);
+};
+
 
   // ── Socket ──────────────────────────────────────────────
-  useEffect(() => {
-    const cleanup = connectSocket({
-       onConnect: () => {
-    console.log("🟢 PARENT SOCKET CONNECTED");
-    setConnected(true);
-    // Add directly in useEffect after connectSocket, before return cleanup
+useEffect(() => {
+  console.log("🚀 SOCKET EFFECT MOUNTED");
 
-  },
-       onDisconnect: () => {
-    console.log("🔴 PARENT SOCKET DISCONNECTED");
-    setConnected(false);
-  },
+  const cleanup = connectSocket({
+    onConnect: () => {
+      console.log("🟢 PARENT SOCKET CONNECTED");
+      setConnected(true);
+    },
+
+    onDisconnect: () => {
+      console.log("🔴 PARENT SOCKET DISCONNECTED");
+      setConnected(false);
+    },
 
 
-      onBusLocationUpdate: (bus: BusUpdate) => {
-                console.log(
-  "📡 PARENT RECEIVED BUS:",
-  bus.latitude,
-  bus.longitude
-);
-        
-        if (tripEnded) return;
+    
+onTripStarted: (data) => {
+  console.log("🟢 PARENT TRIP STARTED:", data);
 
-        console.log(
-  "🚌 LIVE BUS:",
+  // Clear the previous trip's ended state
+  tripEndedRef.current = false;
+  setTripEnded(false);
+
+  // The trip is active, but wait for a fresh GPS update
+  setBusStatus("Active");
+  setBusLive(false);
+  setLastUpdate(null);
+  setSpeed(0);
+  setEta("--");
+
+  console.log("✅ Parent ready for new trip locations");
+},
+
+
+
+
+    onBusLocationUpdate: (bus: BusUpdate) => {
+      console.log(
+        "📡 PARENT RECEIVED BUS:",
+        bus.latitude,
+        bus.longitude
+      );
+
+      if (tripEndedRef.current) return;
+
+      console.log("🚌 LIVE BUS:", bus);
+
+      setBusLive(true);
+      setLastUpdate(new Date());
+
+      moveBus(
   bus.latitude,
   bus.longitude,
-  "speed:",
-  bus.speed,
-  "distance:",
-  bus.distance
+  bus.heading ?? 0,
+  bus.speed ?? 0
 );
 
-setBusLive(true);
-setLastUpdate(new Date());
+      if (bus.speed !== undefined) {
+        setSpeed(bus.speed);
+      }
 
-const pickupLat = pickupLatRef.current;
-const pickupLng = pickupLngRef.current;
+      if (bus.distance !== undefined) {
+        setDistance(bus.distance);
+      }
 
-if (
-  pickupLat !== null &&
-  pickupLng !== null
-) {
-  const stopDistance = distanceBetweenMeters(
-    bus.latitude,
-    bus.longitude,
-    pickupLat,
-    pickupLng
-  );
+      if (bus.eta !== undefined) {
+        setEta(String(bus.eta));
+      }
+    },
 
-  setNextStopDistance(stopDistance);
-  setIsArriving(stopDistance <= 50000);
-  const currentSpeedKmh = bus.speed ?? 0;
+    onTripEnded: (data) => {
+      console.log("🛑 PARENT TRIP ENDED:", data);
 
-if (currentSpeedKmh > 2 && stopDistance > 0) {
-  const hours = stopDistance / 1000 / currentSpeedKmh;
-  const minutes = Math.ceil(hours * 60);
+      if (data.busNo !== busNoRef.current) return;
 
-  setNextStopEta(
-    minutes <= 1 ? "<1 min" : `${minutes} min`
-  );
-} else {
-  setNextStopEta("--");
-}
-}
+      tripEndedRef.current = true;
 
-
-        moveBus(bus.latitude, bus.longitude, bus.heading ?? 0);
-        if (bus.speed    !== undefined) setSpeed(bus.speed);
-        if (bus.distance !== undefined) setDistance(bus.distance);
-        if (bus.eta      !== undefined) setEta(String(bus.eta));
-
-        // Update progress bar every update
-        if (bus.distance !== undefined && totalDistRef.current > 0) {
-          const pct = Math.max(0, Math.min(100,
-            Math.round((1 - bus.distance / totalDistRef.current) * 100)
-          ));
-          setProgress(pct);
-          injectJs(`window.updateProgressBar && window.updateProgressBar(${pct});`);
-        }
-      },
-
-
-
-
-      onTripEnded: (data) => {
-         console.log("🔔 PARENT TRIP STARTED:", data);
-        if (data.busNo !== busNoRef.current) return;
-        Alert.alert("🛑 Trip Completed", "Today's bus trip has ended.");
-        setTripEnded(true);
-        setBusStatus("Offline");
-        setEta("--");
-        setSpeed(0);
-         Alert.alert(
-    "🚌 Bus Trip Started",
-    `Bus ${data.busNo} has started its journey.`
-  );
-      },
-      
-    });
-    
-    
-      const { io } = require("socket.io-client");
-  const rawSocket = io("http://192.168.31.237:5000");
-  rawSocket.onAny((event: string, data: any) => {
-    console.log("🔴 RAW EVENT:", event, JSON.stringify(data).slice(0, 150));
+      setTripEnded(true);
+      setBusStatus("Offline");
+      setEta("--");
+      setSpeed(0);
+      setBusLive(false);
+setLastUpdate(null);
+    },
   });
 
-  return () => { cleanup(); rawSocket.disconnect(); };
-}, [tripEnded]);
+  return () => {
+    console.log("💥 SOCKET EFFECT UNMOUNTING");
+    cleanup();
+  };
+}, []);
 
 useEffect(() => {
   if (!lastUpdate) return;
@@ -291,8 +313,9 @@ setDriverPhone(data.driverPhone || "");
       // ⭐ THIS WAS MISSING
       encodedPolyline: polyline,
     });
-
-    setHtml(htmlContent);
+    mapReadyRef.current = false;
+setHtml(htmlContent);
+  
 
   } catch (err) {
     console.log("Map load error:", err);
@@ -406,9 +429,30 @@ function formatDistance(meters: number): string {
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
-        onMessage={(e) =>
-            console.log("WebView:", e.nativeEvent.data)
-        }
+   
+onMessage={(e) => {
+  const message = e.nativeEvent.data;
+  console.log("WebView:", message);
+
+  if (message.includes("Map fully initialized")) {
+    mapReadyRef.current = true;
+    console.log("✅ Parent map is ready for GPS updates");
+
+    const pending = pendingBusUpdateRef.current;
+
+    if (pending) {
+      pendingBusUpdateRef.current = null;
+
+      moveBus(
+        pending.latitude,
+        pending.longitude,
+        pending.heading ?? 0,
+        pending.speed ?? 0
+      );
+    }
+  }
+}}
+
     />
       {/* ── Glass status card ────────────────────────────── */}
       <View style={mapStyles.statusCardWrapper}>
@@ -630,10 +674,7 @@ function formatDistance(meters: number): string {
               <View style={{ width:16, height:3, borderRadius:2, backgroundColor:"#3B82F6" }} />
               <Text style={mapStyles.legendText}>Ahead</Text>
             </View>
-            <View style={{ flexDirection:"row", alignItems:"center", gap:5 }}>
-              <View style={{ width:16, height:3, borderRadius:2, backgroundColor:C.success }} />
-              <Text style={mapStyles.legendText}>Driven</Text>
-            </View>
+          
           </View>
         </View>
       </View>
