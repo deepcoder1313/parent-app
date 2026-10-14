@@ -67,6 +67,14 @@ const [nextStopEta, setNextStopEta] = useState("--");
 const [isArriving, setIsArriving] = useState(false);
 const tripEndedRef = useRef(false);
 
+const lastRouteRefreshRef = useRef(0);
+const lastRoutedPositionRef = useRef<{
+  lat: number;
+  lng: number;
+} | null>(null);
+const routeRefreshInFlightRef = useRef(false);
+
+
   const progressAnim = useRef(new Animated.Value(0)).current;
   const busNoRef     = useRef("");
   const totalDistRef = useRef(0);
@@ -110,6 +118,82 @@ const moveBus = (
   `);
 };
 
+const refreshRouteFromLivePosition = async (
+  lat: number,
+  lng: number
+) => {
+  const pickupLat = pickupLatRef.current;
+  const pickupLng = pickupLngRef.current;
+
+  if (
+    !mapReadyRef.current ||
+    pickupLat == null ||
+    pickupLng == null ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    routeRefreshInFlightRef.current
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastPosition = lastRoutedPositionRef.current;
+
+  const movedMeters = lastPosition
+    ? distanceBetweenMeters(
+        lastPosition.lat,
+        lastPosition.lng,
+        lat,
+        lng
+      )
+    : Infinity;
+
+  // Refresh after 30 seconds, or after moving 300 metres.
+  if (
+    lastPosition &&
+    now - lastRouteRefreshRef.current < 30_000 &&
+    movedMeters < 300
+  ) {
+    return;
+  }
+
+  routeRefreshInFlightRef.current = true;
+
+  try {
+    console.log("🛣️ REROUTING FROM LIVE BUS LOCATION:", {
+      latitude: lat,
+      longitude: lng,
+      pickupLat,
+      pickupLng,
+    });
+
+    const result = await fetchAndDrawRoute(
+      webViewRef,
+      lat,
+      lng,
+      pickupLat,
+      pickupLng,
+      false
+    );
+
+    if (result) {
+      lastRouteRefreshRef.current = Date.now();
+      lastRoutedPositionRef.current = { lat, lng };
+
+      console.log("✅ LIVE ROUTE UPDATED:", {
+        points: result.decodedPoints.length,
+        distance: result.distanceMeters,
+        duration: result.durationMinutes,
+      });
+    } else {
+      console.log("⚠️ Live reroute returned no route");
+    }
+  } catch (error) {
+    console.log("❌ Live reroute failed:", error);
+  } finally {
+    routeRefreshInFlightRef.current = false;
+  }
+};
 
   // ── Socket ──────────────────────────────────────────────
 useEffect(() => {
@@ -167,6 +251,10 @@ onTripStarted: (data) => {
   bus.longitude,
   bus.heading ?? 0,
   bus.speed ?? 0
+);
+void refreshRouteFromLivePosition(
+  bus.latitude,
+  bus.longitude
 );
 
       if (bus.speed !== undefined) {
@@ -432,7 +520,9 @@ function formatDistance(meters: number): string {
    
 onMessage={(e) => {
   const message = e.nativeEvent.data;
-  console.log("WebView:", message);
+ console.log("📩 WEBVIEW MESSAGE:", message);
+
+  
 
   if (message.includes("Map fully initialized")) {
     mapReadyRef.current = true;
@@ -453,7 +543,32 @@ onMessage={(e) => {
   }
 }}
 
-    />
+
+
+onError={(event) => {
+  console.log(
+    "❌ WEBVIEW ERROR:",
+    event.nativeEvent.description
+  );
+}}
+
+onLoadStart={() => {
+  console.log("🌐 WEBVIEW LOAD START");
+}}
+
+onLoadEnd={() => {
+  console.log("🌐 WEBVIEW LOAD END");
+}}
+
+onHttpError={(event) => {
+  console.log(
+    "❌ WEBVIEW HTTP ERROR:",
+    event.nativeEvent.statusCode,
+    event.nativeEvent.description
+  );
+}}
+/>
+
       {/* ── Glass status card ────────────────────────────── */}
       <View style={mapStyles.statusCardWrapper}>
         <BlurView intensity={55} tint="dark" style={mapStyles.statusCard}>

@@ -8,6 +8,7 @@
     var remainingRouteLayer = null;
     var routeGlowLayer      = null;
     var fullRouteCoords      = [];
+    var lastRouteIndex = 0;
 
     /* ── Polyline decoder ────────────────────────────────── */
     function decodePolyline(encoded) {
@@ -35,6 +36,7 @@ window.drawRoute = function(coords) {
   }
 
   fullRouteCoords = coords;
+  lastRouteIndex = 0
 
   console.log("🛣️ ROUTE FIRST POINT:", coords[0]);
   console.log("🛣️ ROUTE LAST POINT:", coords[coords.length - 1]);
@@ -63,17 +65,59 @@ window.drawRoute = function(coords) {
   console.log("✅ BLUE ROUTE DRAWN");
 };
 
+
+
+function distanceMeters(a, b) {
+  var lat1 = a[0] * Math.PI / 180;
+  var lat2 = b[0] * Math.PI / 180;
+  var dLat = (b[0] - a[0]) * Math.PI / 180;
+  var dLng = (b[1] - a[1]) * Math.PI / 180;
+
+  var h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) *
+    Math.sin(dLng / 2) ** 2;
+
+  return 6371000 * 2 *
+    Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
 function trimRouteToCurrentPosition(lat, lng) {
-  if (!remainingRouteLayer || !fullRouteCoords.length) return;
+  if (!remainingRouteLayer || fullRouteCoords.length < 2) return;
 
-  var idx = getNearestRouteIndex(lat, lng);
-  var remaining = fullRouteCoords.slice(idx);
+  var busPoint = [lat, lng];
+  var nearest = lastRouteIndex;
+  var minDist = Infinity;
 
-  // Update only the blue route
+  // Search only forward: never restore a route already completed.
+  for (var i = lastRouteIndex; i < fullRouteCoords.length; i++) {
+    var d = distanceMeters(busPoint, fullRouteCoords[i]);
+
+    if (d < minDist) {
+      minDist = d;
+      nearest = i;
+    }
+  }
+
+  // Don't trim if the bus is far away from the route.
+  if (minDist > 100) {
+    console.log("⚠️ Bus is off route; keeping blue route", {
+      distanceMeters: Math.round(minDist)
+    });
+    return;
+  }
+
+  lastRouteIndex = Math.max(lastRouteIndex, nearest);
+
+  var remaining = fullRouteCoords.slice(lastRouteIndex);
+
   remainingRouteLayer.setLatLngs(remaining);
 
+  if (routeGlowLayer) {
+    routeGlowLayer.setLatLngs(remaining);
+  }
+
   console.log("🛣️ ROUTE PROGRESS:", {
-    index: idx,
+    index: lastRouteIndex,
     total: fullRouteCoords.length,
     remaining: remaining.length
   });
@@ -82,7 +126,6 @@ function trimRouteToCurrentPosition(lat, lng) {
 window.updateRouteProgress = function(lat, lng) {
   trimRouteToCurrentPosition(lat, lng);
 };
-
 
     /* ── Draw initial route if polyline provided ─────────── */
     var encodedPolyline = ${JSON.stringify(encodedPolyline)};

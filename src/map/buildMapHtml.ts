@@ -72,14 +72,27 @@ export function buildMapHtml(o: MapHtmlOptions): string {
 
 <script>
 try {
+window.ReactNativeWebView?.postMessage("HTML SCRIPT STARTED");
 
-window.onerror = function(msg, src, line, col) {
-  window.ReactNativeWebView &&
-  window.ReactNativeWebView.postMessage(
-    JSON.stringify({ type:"JS_ERROR", msg:msg, line:line, col:col })
-  );
+window.onerror = function(message, source, lineno, colno, error) {
+  var details = {
+    message: String(message),
+    source: source,
+    line: lineno,
+    column: colno,
+    stack: error ? error.stack : null
+  };
+
+  console.error("WEBVIEW JS ERROR:", JSON.stringify(details));
+
+  if (window.ReactNativeWebView) {
+    window.ReactNativeWebView.postMessage(
+      "WEBVIEW_JS_ERROR:" + JSON.stringify(details)
+    );
+  }
+
+  return false;
 };
-
 if (typeof L === "undefined") {
   window.ReactNativeWebView &&
   window.ReactNativeWebView.postMessage("ERROR: Leaflet not loaded");
